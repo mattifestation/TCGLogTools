@@ -75,10 +75,6 @@ I deliberately disabled SecureBoot in the UEFI BIOS so that I could observe the 
 1. The PCR7 EV_EFI_VARIABLE_DRIVER_CONFIG event value for the "SecureBoot" UEFI variable goes from 1 (enabled) to 0 (disabled). The variable digest values differed as well.
 2. 0000000030-0000000000.log has one less PCR7 (SecureBoot) measurement: it doesn't have an EV_EFI_VARIABLE_AUTHORITY event (which should follow the EV_SEPARATOR event).
 
-### Malicious Scenario #2: TestSigning Enabled to Circumvent Driver Signature Enforcement
-
-BLAH BLAH BLAH
-
 So not only can these logs be used to attest to specific boot states and configurations, but they can also be used to investigate potentially suspicious changes. `ConvertTo-TCGEventLog` can also be used to baseline assumed known-good states. For example, PCR0 measurements should rarely change.
 
 ## References
