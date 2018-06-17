@@ -247,22 +247,6 @@ $Script:EventTypeMapping = @{
     [UInt32] (2147483648 + 0xE0) = 'EV_EFI_VARIABLE_AUTHORITY'     # Documented here: https://docs.microsoft.com/en-us/windows-hardware/test/hlk/testref/trusted-execution-environment-efi-protocol
 }
 
-$Script:PCRFriendlyNameMapping = @{
-    -1 = 'AttestationIdentityKey'
-    0  = 'CoreSystemFirmwareExecutableCode'
-    1  = 'CoreSystemFirmwareData'
-    2  = 'UEFIDriverCode'
-    3  = 'UEFIDriverData'
-    4  = 'BootManagerCode'
-    5  = 'GPTPartitionTable'
-    6  = 'ResumePowerStateEvents'
-    7  = 'SecureBoot'
-    11 = 'BitLocker'
-    12 = 'DataAndHighlyVolatileEvents'
-    13 = 'BootModuleDetails'
-    14 = 'BootAuthorities'
-}
-
 $Script:DigestSizeMapping = @{
     'TPM_ALG_SHA1'    = 20
     'TPM_ALG_SHA256'  = 32
@@ -337,31 +321,255 @@ function Get-SIPAEventData {
         # All SIPA event types _should_ be defined but just in case one isn't, print it out in hex.
         if (-not $SIPAEventType) { $SIPAEventType = "0x$($SIPAEventTypeVal.ToString('X8'))" }
 
-        if (($SIPAEventTypeVal -band 0x000F0000) -eq $ContainerType) {
-            # Recurse through the container structure
-            [PSCustomObject] @{
-                IsContainer = $True
-                SIPAEventType = $SIPAEventType
-                SIPAEventData = Get-SIPAEventData -SIPAEventBytes $EventBytes
+        if ((($SIPAEventTypeVal -band 0x000F0000) -eq $ContainerType) -or (($SIPAEventType -eq 'NoAuthority') -or ($SIPAEventType -eq 'AuthorityPubKey'))) {
+            switch ($SIPAEventType) {
+                'TrustBoundary' {
+                    $PropertyTemplate = [Ordered] @{
+                        Information = $null
+                        PreOSParameters = $null
+                        OSParameters = $null
+                        LoadedModules = $null # This appears to be the only one that will have multiple entries
+                        ELAM = $null
+                        VBS = $null
+                    }
+
+                    $InformationTemplate = @{
+                        Information = $null
+                        BootCounter = $null
+                        TransferControl = $null
+                        ApplicationReturn = $null
+                        BitlockerUnlock = $null
+                        EventCounter = $null
+                        CounterID = $null
+                        MORBitNotCancelable = $null
+                        ApplicationSVN = $null
+                        SVNChainStatus = $null
+                        MORBitAPIStatus = $null
+                    }
+
+                    $PreOSTemplate = @{
+                        BootDebugging = $null
+                        BootRevocationList = $null
+                    }
+
+                    $OSTemplate = @{
+                        OSKernelDebug = $null
+                        CodeIntegrity = $null
+                        TestSigning = $null
+                        DataExecutionPrevention = $null
+                        SafeMode = $null
+                        WinPE = $null
+                        PhysicalAddressExtension = $null
+                        OSDevice = $null
+                        SystemRoot = $null
+                        HypervisorLaunchType = $null
+                        HypervisorPath = $null
+                        HypervisorIOMMUPolicy = $null
+                        HypervisorDebug = $null
+                        DriverLoadPolicy = $null
+                        SIPolicy = $null
+                        HypervisorMMIONXPolicy = $null
+                        HypervisorMSRFilterPolicy = $null
+                        VSMLaunchType = $null
+                        OSRevocationList = $null
+                        VSMIDKInfo = $null
+                        FlightSigning = $null
+                        PagefileEncryptionEnabled = $null
+                        VSMIDKSInfo = $null
+                        HibernationDisabled = $null
+                        DumpsDisabled = $null
+                        DumpEncryptionEnabled = $null
+                        DumpEncryptionKeyDigest = $null
+                        LSAISOConfig = $null
+                    }
+
+                    $VBSTemplate = @{
+                        VBSVSMRequired = $null
+                        VBSSecurebootRequired = $null
+                        VBSIOMMURequired = $null
+                        VBSNXRequired = $null
+                        VBSMSRFilteringRequired = $null
+                        VBSMandatoryEnforcement = $null
+                        VBSHVCIPolicy = $null
+                        VBSMicrosoftBootChainRequired = $null
+                    }
+
+                    $ContainerEvents = Get-SIPAEventData -SIPAEventBytes $EventBytes
+
+                    $LoadedModuleList = New-Object 'System.Collections.Generic.List[PSObject]'
+                    $ELAMList = New-Object 'System.Collections.Generic.List[PSObject]'
+
+                    $InformationTemplateSet = $False
+                    $PreOSTemplateSet = $False
+                    $OSTemplateSet = $False
+                    $VBSTemplateSet = $False
+
+                    foreach ($Container in $ContainerEvents) {
+                        if ($Container.SIPAEventType -eq 'LoadedModuleAggregation') {
+                            $LoadedModuleList.Add($Container.SIPAEventData)
+                        } elseif ($Container.SIPAEventType -eq 'ELAMAggregation') {
+                            $ELAMList.Add($Container.SIPAEventData)
+                        } else {
+                            switch ($Container.Category) {
+                                'Information' {
+                                    $InformationTemplateSet = $True
+                                    $InformationTemplate[$Container.SIPAEventType] = $Container.SIPAEventData
+                                }
+
+                                'PreOSParameter' {
+                                    $PreOSTemplateSet = $True
+                                    $PreOSTemplate[$Container.SIPAEventType] = $Container.SIPAEventData
+                                }
+
+                                'OSParameter' {
+                                    $OSTemplateSet = $True
+                                    $OSTemplate[$Container.SIPAEventType] = $Container.SIPAEventData
+                                }
+
+                                'VBS' {
+                                    $VBSTemplateSet = $True
+                                    $VBSTemplate[$Container.SIPAEventType] = $Container.SIPAEventData
+                                }
+                            }
+                        }
+                    }
+
+                    $InformationObject = $null
+                    $PreOSParameterObject = $null
+                    $OSParameterObject = $null
+                    $VBSObject = $null
+
+                    if ($InformationTemplateSet) { $InformationObject = [PSCustomObject] $InformationTemplate }
+                    if ($PreOSTemplateSet) { $PreOSParameterObject = [PSCustomObject] $PreOSTemplate }
+                    if ($OSTemplateSet) { $OSParameterObject = [PSCustomObject] $OSTemplate }
+                    if ($VBSTemplateSet) { $VBSObject = [PSCustomObject] $VBSTemplate }
+
+                    $PropertyTemplate['Information'] = $InformationObject
+                    $PropertyTemplate['PreOSParameters'] = $PreOSParameterObject
+                    $PropertyTemplate['OSParameters'] = $OSParameterObject
+                    $PropertyTemplate['VBS'] = $VBSObject
+                    if ($LoadedModuleList.Count) { $PropertyTemplate['LoadedModules'] = $LoadedModuleList }
+                    if ($ELAMList) { $PropertyTemplate['ELAM'] = $ELAMList }
+
+                    [PSCustomObject] $PropertyTemplate
+                }
+
+                'LoadedModuleAggregation' {
+                    $PropertyTemplate = [Ordered] @{
+                        FilePath = $null
+                        ImageBase = $null
+                        ImageSize = $null
+                        HashAlgorithmID = $null
+                        AuthenticodeHash = $null
+                        ImageValidated = $null
+                        AuthorityIssuer = $null
+                        AuthorityPublisher = $null
+                        AuthoritySerial = $null
+                        AuthoritySHA1Thumbprint = $null
+                        ModuleSVN = $null
+                    }
+
+                    $ContainerEvents = Get-SIPAEventData -SIPAEventBytes $EventBytes
+
+                    foreach ($Container in $ContainerEvents) {
+                        $PropertyTemplate[$Container.SIPAEventType] = $Container.SIPAEventData
+                    }
+
+                    $ContainerObject = [PSCustomObject] $PropertyTemplate
+
+                    [PSCustomObject] @{
+                        IsContainer = $False
+                        SIPAEventType = $SIPAEventType
+                        SIPAEventData = $ContainerObject
+                    }
+                }
+
+                'ELAMAggregation' {
+                    $PropertyTemplate = [Ordered] @{
+                        ELAMKeyname = $null
+                        ELAMConfiguration = $null
+                        ELAMPolicy = $null
+                        ELAMMeasured = $null
+                    }
+
+                    $ContainerEvents = Get-SIPAEventData -SIPAEventBytes $EventBytes
+
+                    foreach ($Container in $ContainerEvents) {
+                        $PropertyTemplate[$Container.SIPAEventType] = $Container.SIPAEventData
+                    }
+
+                    $ContainerObject = [PSCustomObject] $PropertyTemplate
+
+                    [PSCustomObject] @{
+                        IsContainer = $False
+                        SIPAEventType = $SIPAEventType
+                        SIPAEventData = $ContainerObject
+                    }
+                }
+
+                'TrustpointAggregation' {
+                    $PropertyTemplate = [Ordered] @{
+                        AIKID = $null
+                        AIKPubDigest = $null
+                        Quote = $null
+                        QuoteSignature = $null
+                    }
+
+                    $ContainerEvents = Get-SIPAEventData -SIPAEventBytes $EventBytes
+
+                    foreach ($Container in $ContainerEvents) {
+                        $PropertyTemplate[$Container.SIPAEventType] = $Container.SIPAEventData
+                    }
+
+                    $ContainerObject = [PSCustomObject] $PropertyTemplate
+
+                    $ContainerObject
+                }
+
+                'NoAuthority' {
+                    [PSCustomObject] @{
+                        NoAuthority = $EventBytes
+                    }
+                }
+
+                'AuthorityPubKey' {
+                    [PSCustomObject] @{
+                        AuthorityPubKey = ($EventBytes | ForEach-Object { $_.ToString('X2') }) -join ':'
+                    }
+                }
+
+                default {
+                    # Return raw event data for KSR containers until I have data to actually parse
+                    # KSRAggregation
+                    # KSRSignedMeasurementAggregation
+
+                    Write-Warning "Uncategorized SIPA Event Category"
+
+                    [PSCustomObject] @{
+                        IsContainer = $True
+                        SIPAEventType = $SIPAEventType
+                        SIPAEventData = Get-SIPAEventData -SIPAEventBytes $EventBytes
+                    }
+                }
             }
         } else {
             # Each SIPA event data structure will differ depending on the type.
             # Many of these data types are not formally defined but can be easily inferred.
             # If the strucutre is not explicitly stated, it is inferred from multiple events.
             switch ($SIPAEventType) {
-                #'Information'        { # I have no data yet }
-                'BootCounter'         { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'TransferControl'     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
-                #'ApplicationReturn'  { # I don't have populated data for this yet }
-                'BitlockerUnlock'     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
-                'EventCounter'        { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'CounterID'           { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'MORBitNotCancelable' { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
-                'ApplicationSVN'      { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
-                'SVNChainStatus'      { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
+                'Information'         { $EventData = $EventBytes; $Category = 'Information' }
+                'BootCounter'         { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'Information' }
+                'TransferControl'     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'Information' }
+                'ApplicationReturn'   { $EventData = $EventBytes; $Category = 'Information' }
+                'BitlockerUnlock'     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'Information' }
+                'EventCounter'        { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'Information' }
+                'CounterID'           { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'Information' }
+                'MORBitNotCancelable' { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'Information' }
+                'ApplicationSVN'      { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'Information' }
+                'SVNChainStatus'      { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'Information' }
                 # MemoryOverwriteRequest - Introduced in the TCG Platform Reset Attack Mitigation Specification
-                'MORBitAPIStatus'     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
-                'BootDebugging'       { $EventData = [Bool] $EventBytes[0] }
+                'MORBitAPIStatus'     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'Information' }
+                'BootDebugging'       { $EventData = [Bool] $EventBytes[0]; $Category = 'PreOSParameter' }
 
                 'BootRevocationList' {
                     # SIPAEVENT_REVOCATION_LIST_PAYLOAD structure
@@ -372,6 +580,8 @@ function Get-SIPAEventData {
                     $HashAlgorithm = $DigestAlgorithmMapping[[BitConverter]::ToUInt16($EventBytes, 0x0C)]
                     $Digest = [BitConverter]::ToString($EventBytes[0x0E..(0x0E + $DigestLength - 1)]).Replace('-', '')
 
+                    $Category = 'PreOSParameter'
+
                     $EventData = [PSCustomObject] @{
                         CreationTime = $CreationTime
                         HashAlgorithm = $HashAlgorithm
@@ -379,20 +589,20 @@ function Get-SIPAEventData {
                     }
                 }
 
-                'OSKernelDebug'            { $EventData = [Bool] $EventBytes[0] }
-                'CodeIntegrity'            { $EventData = [Bool] $EventBytes[0] }
-                'TestSigning'              { $EventData = [Bool] $EventBytes[0] }
-                'DataExecutionPrevention'  { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'SafeMode'                 { $EventData = [Bool] $EventBytes[0] }
-                'WinPE'                    { $EventData = [Bool] $EventBytes[0] }
-                'PhysicalAddressExtension' { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'OSDevice'                 { $EventData = $OSDeviceMapping[[BitConverter]::ToInt32($EventBytes, 0)] }
-                'SystemRoot'               { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)) }
-                'HypervisorLaunchType'     { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                #'HypervisorPath'          { # I don't have data to parse yet }
-                'HypervisorIOMMUPolicy'    { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'HypervisorDebug'          { $EventData = [Bool] $EventBytes[0] }
-                'DriverLoadPolicy'         { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
+                'OSKernelDebug'            { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'CodeIntegrity'            { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'TestSigning'              { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'DataExecutionPrevention'  { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'OSParameter' }
+                'SafeMode'                 { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'WinPE'                    { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'PhysicalAddressExtension' { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'OSParameter' }
+                'OSDevice'                 { $EventData = $OSDeviceMapping[[BitConverter]::ToInt32($EventBytes, 0)]; $Category = 'OSParameter' }
+                'SystemRoot'               { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)); $Category = 'OSParameter' }
+                'HypervisorLaunchType'     { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'OSParameter' }
+                'HypervisorPath'           { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)); $Category = 'OSParameter' }
+                'HypervisorIOMMUPolicy'    { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'OSParameter' }
+                'HypervisorDebug'          { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'DriverLoadPolicy'         { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'OSParameter' }
 
                 'SIPolicy' {
                     # SIPAEVENT_SI_POLICY_PAYLOAD structure
@@ -412,6 +622,8 @@ function Get-SIPAEventData {
                     $PolicyName = [Text.Encoding]::Unicode.GetString($EventBytes[0x10..($DigestIndex - 1)]).TrimEnd(@(0))
                     $Digest = [BitConverter]::ToString($EventBytes[($DigestIndex)..($DigestIndex + $DigestLength - 1)]).Replace('-', '')
 
+                    $Category = 'OSParameter'
+
                     $EventData = [PSCustomObject] @{
                         PolicyVersion = $PolicyVersion
                         PolicyName = $PolicyName
@@ -420,9 +632,9 @@ function Get-SIPAEventData {
                     }
                 }
 
-                'HypervisorMMIONXPolicy'    { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'HypervisorMSRFilterPolicy' { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'VSMLaunchType'             { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
+                'HypervisorMMIONXPolicy'    { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'OSParameter' }
+                'HypervisorMSRFilterPolicy' { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'OSParameter' }
+                'VSMLaunchType'             { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'OSParameter' }
 
                 'OSRevocationList' {
                     # SIPAEVENT_REVOCATION_LIST_PAYLOAD structure
@@ -432,6 +644,8 @@ function Get-SIPAEventData {
                     $DigestLength = [BitConverter]::ToUInt32($EventBytes, 8)
                     $HashAlgorithm = $DigestAlgorithmMapping[[BitConverter]::ToUInt16($EventBytes, 0x0C)]
                     $Digest = [BitConverter]::ToString($EventBytes[0x0E..(0x0E + $DigestLength - 1)]).Replace('-', '')
+
+                    $Category = 'OSParameter'
 
                     $EventData = [PSCustomObject] @{
                         CreationTime = $CreationTime
@@ -455,15 +669,17 @@ function Get-SIPAEventData {
                     [Byte[]] $PublicExponent = $EventBytes[0x10..($ModulusIndex - 1)]
                     [Byte[]] $Modulus = $EventBytes[($ModulusIndex)..($ModulusIndex + $ModulusSizeBytes - 1)]
 
+                    $Category = 'OSParameter'
+
                     $EventData = [PSCustomObject] @{
                         KeyAlgID = $KeyAlgID
-                        PublicExponent = $PublicExponent
-                        Modulus = $Modulus
+                        PublicExponent = ($PublicExponent | ForEach-Object {$_.ToString('X2')}) -join ':'
+                        Modulus = ($Modulus | ForEach-Object {$_.ToString('X2')}) -join ':'
                     }
                 }
 
-                'FlightSigning'             { $EventData = [Bool] $EventBytes[0] }
-                'PagefileEncryptionEnabled' { $EventData = [Bool] $EventBytes[0] }
+                'FlightSigning'             { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'PagefileEncryptionEnabled' { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
 
                 'VSMIDKSInfo' {
                     # SIPAEVENT_VSM_IDK_INFO_PAYLOAD structure
@@ -480,57 +696,59 @@ function Get-SIPAEventData {
                     [Byte[]] $PublicExponent = $EventBytes[0x10..($ModulusIndex - 1)]
                     [Byte[]] $Modulus = $EventBytes[($ModulusIndex)..($ModulusIndex + $ModulusSizeBytes - 1)]
 
+                    $Category = 'OSParameter'
+
                     $EventData = [PSCustomObject] @{
                         KeyAlgID = $KeyAlgID
-                        PublicExponent = $PublicExponent
-                        Modulus = $Modulus
+                        PublicExponent = ($PublicExponent | ForEach-Object {$_.ToString('X2')}) -join ':'
+                        Modulus = ($Modulus | ForEach-Object {$_.ToString('X2')}) -join ':'
                     }
                 }
 
-                'HibernationDisabled'           { $EventData = [Bool] $EventBytes[0] }
-                'DumpsDisabled'                 { $EventData = [Bool] $EventBytes[0] }
-                'DumpEncryptionEnabled'         { $EventData = [Bool] $EventBytes[0] }
+                'HibernationDisabled'           { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'DumpsDisabled'                 { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
+                'DumpEncryptionEnabled'         { $EventData = [Bool] $EventBytes[0]; $Category = 'OSParameter' }
                 # SHA-256 digest of thefollowing regkey value:
                 # CurrentControlSet\Control\CrashControl\EncryptionCertificates\Certificate.1::PublicKey
-                #'DumpEncryptionKeyDigest'      { # I don't have data to parse yet }
-                'LSAISOConfig'                  { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
-                #'NoAuthority'                  { # I don't have data to parse yet }
-                # ASN.1 encoded public key (1.2.840.113549.1.1.1 rsaEncryption)
-                'AuthorityPubKey'               { $EventData = ($EventBytes | ForEach-Object { $_.ToString('X2') }) -join ':' }
-                'FilePath'                      { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)) }
-                'SIPAEventData'                 { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'HashAlgorithmID'               { $EventData = $HashAlgorithmMapping[[BitConverter]::ToInt32($EventBytes, 0)] }
-                'AuthenticodeHash'              { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', '') }
-                'AuthorityIssuer'               { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)) }
-                'AuthoritySerial'               { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', '') }
-                'ImageBase'                     { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'ImageSize'                     { $EventData = [BitConverter]::ToUInt64($EventBytes, 0) }
-                'AuthorityPublisher'            { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)) }
-                'AuthoritySHA1Thumbprint'       { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', '') }
-                'ImageValidated'                { $EventData = [Bool] $EventBytes[0] }
-                'ModuleSVN'                     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0) }
-                'AIKID'                         { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)) }
-                'AIKPubDigest'                  { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', '') }
-                'Quote'                         { $EventData = ($EventBytes | ForEach-Object { $_.ToString('X2') }) -join ':' }
-                'QuoteSignature'                { $EventData = ($EventBytes | ForEach-Object { $_.ToString('X2') }) -join ':' }
-                'VBSVSMRequired'                { $EventData = [Bool] $EventBytes[0] }
-                'VBSSecurebootRequired'         { $EventData = [Bool] $EventBytes[0] }
-                'VBSIOMMURequired'              { $EventData = [Bool] $EventBytes[0] }
-                'VBSNXRequired'                 { $EventData = [Bool] $EventBytes[0] }
-                'VBSMSRFilteringRequired'       { $EventData = [Bool] $EventBytes[0] }
-                #'VBSMandatoryEnforcement'      { # I don't have data to parse yet }
-                #'VBSHVCIPolicy'                { # I don't have data to parse yet }
-                'VBSMicrosoftBootChainRequired' { $EventData = [Bool] $EventBytes[0] }
-                'ELAMKeyname'                   { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)) }
-                'ELAMMeasured'                  { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', '') }
+                'DumpEncryptionKeyDigest'       { $EventData = $EventBytes; $Category = 'OSParameter' }
+                'LSAISOConfig'                  { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'OSParameter' }
+                'FilePath'                      { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)); $Category = 'LoadedImage' }
+                'SIPAEventData'                 { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'LoadedImage' }
+                'HashAlgorithmID'               { $EventData = $HashAlgorithmMapping[[BitConverter]::ToInt32($EventBytes, 0)]; $Category = 'LoadedImage' }
+                'AuthenticodeHash'              { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', ''); $Category = 'LoadedImage' }
+                'AuthorityIssuer'               { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)); $Category = 'LoadedImage' }
+                'AuthoritySerial'               { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', ''); $Category = 'LoadedImage' }
+                'ImageBase'                     { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'LoadedImage' }
+                'ImageSize'                     { $EventData = [BitConverter]::ToUInt64($EventBytes, 0); $Category = 'LoadedImage' }
+                'AuthorityPublisher'            { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)); $Category = 'LoadedImage' }
+                'AuthoritySHA1Thumbprint'       { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', ''); $Category = 'LoadedImage' }
+                'ImageValidated'                { $EventData = [Bool] $EventBytes[0]; $Category = 'LoadedImage' }
+                'ModuleSVN'                     { $EventData = [BitConverter]::ToUInt32($EventBytes, 0); $Category = 'LoadedImage' }
+                'AIKID'                         { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)); $Category = 'Trustpoint' }
+                'AIKPubDigest'                  { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', ''); $Category = 'Trustpoint' }
+                'Quote'                         { $EventData = ($EventBytes | ForEach-Object { $_.ToString('X2') }) -join ':'; $Category = 'Trustpoint' }
+                'QuoteSignature'                { $EventData = ($EventBytes | ForEach-Object { $_.ToString('X2') }) -join ':'; $Category = 'Trustpoint' }
+                'VBSVSMRequired'                { $EventData = [Bool] $EventBytes[0]; $Category = 'VBS' }
+                'VBSSecurebootRequired'         { $EventData = [Bool] $EventBytes[0]; $Category = 'VBS' }
+                'VBSIOMMURequired'              { $EventData = [Bool] $EventBytes[0]; $Category = 'VBS' }
+                'VBSNXRequired'                 { $EventData = [Bool] $EventBytes[0]; $Category = 'VBS' }
+                'VBSMSRFilteringRequired'       { $EventData = [Bool] $EventBytes[0]; $Category = 'VBS' }
+                'VBSMandatoryEnforcement'       { $EventData = $EventBytes; $Category = 'VBS' }
+                'VBSHVCIPolicy'                 { $EventData = $EventBytes; $Category = 'VBS' }
+                'VBSMicrosoftBootChainRequired' { $EventData = [Bool] $EventBytes[0]; $Category = 'VBS' }
+                'ELAMKeyname'                   { $EventData = [Text.Encoding]::Unicode.GetString($EventBytes).TrimEnd(@(0)); $Category = 'ELAM' }
+                'ELAMMeasured'                  { $EventData = [BitConverter]::ToString($EventBytes).Replace('-', ''); $Category = 'ELAM' }
+                'ELAMConfiguration'             { $EventData = $EventBytes; $Category = 'ELAM' }
+                'ELAMPolicy'                    { $EventData = $EventBytes; $Category = 'ELAM' }
 
                 default {
+                    $Category = 'Uncategorized'
                     $EventData = $EventBytes
                 }
             }
 
             [PSCustomObject] @{
-                IsContainer   = $False
+                Category = $Category
                 SIPAEventType = $SIPAEventType
                 SIPAEventData = $EventData
             }
@@ -724,7 +942,7 @@ Using the -MinimizedX509CertInfo so that JSON output is not as verbose.
 
 System.String
 
-Accepts one or more file paths.
+Accepts one or more TCG log file paths.
 
 .OUTPUTS
 
@@ -862,15 +1080,12 @@ Outputs a parsed TCG log.
         PCR = $PCRIndex
         EventType = $EventType
         Digest = $DigestString
-        EventSize = $EventSize
         Event = $TCG_EfiSpecIdEventStruct
     }
 
     # Loop through all the remaining measurements, parsing each TCG_PCR_EVENT2 struct along the way
     $Events = while ($BinaryReader.PeekChar() -ne -1) {
         $PCRIndex = $BinaryReader.ReadInt32()
-        # Supply a friendly name for the PCR index
-        $PCRName = $PCRFriendlyNameMapping[$PCRIndex]
 
         $EventTypeVal = $BinaryReader.ReadUInt32()
         $EventType = $EventTypeMapping[$EventTypeVal]
@@ -879,18 +1094,22 @@ Outputs a parsed TCG log.
         # Multiple digests can be calculated/stored but in plractice, you will likely only over see one digest.
         $DigestValuesCount = $BinaryReader.ReadUInt32()
 
-        $Digests = New-Object -TypeName PSObject[]($DigestValuesCount)
-
-        for ($i = 0; $i -lt $DigestValuesCount; $i++) {
+        if ($DigestValuesCount -eq 1) {
             $HashAlg = $DigestAlgorithmMapping[$BinaryReader.ReadUInt16()]
             $DigestSize = $DigestSizeMapping[$HashAlg]
 
-            $Digests[$i] = New-Object -TypeName PSObject -Property @{
-                PSTypeName = 'TCGPCREvent2Digests'
-                HashAlg = $HashAlg
-                Digest = [BitConverter]::ToString($BinaryReader.ReadBytes($DigestSize)).Replace('-', '')
+            $Digests = [BitConverter]::ToString($BinaryReader.ReadBytes($DigestSize)).Replace('-', '')
+        } else {
+            $Digests = New-Object -TypeName PSObject[]($DigestValuesCount)
+
+            for ($i = 0; $i -lt $DigestValuesCount; $i++) {
+                $HashAlg = $DigestAlgorithmMapping[$BinaryReader.ReadUInt16()]
+                $DigestSize = $DigestSizeMapping[$HashAlg]
+
+                $Digests[$i] = [BitConverter]::ToString($BinaryReader.ReadBytes($DigestSize)).Replace('-', '')
             }
         }
+        
 
         $EventSize = $BinaryReader.ReadUInt32()
 
@@ -1031,8 +1250,11 @@ Outputs a parsed TCG log.
             'EV_SEPARATOR' {
                 $EventBytes = $BinaryReader.ReadBytes($EventSize)
 
-                # PCR >= 12 should be "WBCL" - Windows Boot Configuration Log
-                $Event = $EventBytes
+                if ($PCRIndex -gt 11) {
+                    $Event = [Text.Encoding]::ASCII.GetString($EventBytes)
+                } else {
+                    $Event = ($EventBytes | ForEach-Object {$_.ToString('X2')}) -join ':'
+                }
             }
 
             'EV_EFI_VARIABLE_AUTHORITY' {
@@ -1247,7 +1469,7 @@ Outputs a parsed TCG log.
                                             PartitionNumber = $PartitionNumber
                                             PartitionStart = $PartitionStart
                                             PartitionSize = $PartitionSize
-                                            Signature = $SignatureBytes
+                                            Signature = ($SignatureBytes | ForEach-Object {$_.ToString('X2')}) -join ':'
                                             MBRType = $MBRType
                                             SignatureType = $SignatureType
                                         }
@@ -1314,7 +1536,7 @@ Outputs a parsed TCG log.
                                     Type = $DevicePathType
                                     SubType = $DeviceSubType
                                     Length = $Length
-                                    Data = $DataBytes
+                                    Data = ($DataBytes | ForEach-Object {$_.ToString('X2')}) -join ':'
                                 }
                             }
                         }
@@ -1399,7 +1621,7 @@ Outputs a parsed TCG log.
                                                 PartitionNumber = $PartitionNumber
                                                 PartitionStart = $PartitionStart
                                                 PartitionSize = $PartitionSize
-                                                Signature = $SignatureBytes
+                                                Signature = ($SignatureBytes | ForEach-Object {$_.ToString('X2')}) -join ':'
                                                 MBRType = $MBRType
                                                 SignatureType = $SignatureType
                                             }
@@ -1466,7 +1688,7 @@ Outputs a parsed TCG log.
                                         Type = $DevicePathType
                                         SubType = $DeviceSubType
                                         Length = $Length
-                                        Data = $DataBytes
+                                        Data = ($DataBytes | ForEach-Object {$_.ToString('X2')}) -join ':'
                                     }
                                 }
                             }
@@ -1505,28 +1727,63 @@ Outputs a parsed TCG log.
             }
 
             default {
-                $Event = $BinaryReader.ReadBytes($EventSize)
+                $Event = ($BinaryReader.ReadBytes($EventSize) | ForEach-Object {$_.ToString('X2')}) -join ':'
             }
         }
 
-        [PSCustomObject] @{
-            PSTypeName = 'TCGPCREvent2'
+        [Ordered] @{
             PCR = $PCRIndex
-            PCRName = $PCRName
             EventType = $EventType
-            Digests = $Digests
-            EventSize = $EventSize
+            Digest = $Digests
             Event = $Event
         }
     }
 
     $BinaryReader.Close()
 
+    $PCRTemplate = [Ordered] @{
+        PCR0 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR1 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR2 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR3 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR4 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR5 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR6 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR7 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR8 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR9 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR10 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR11 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR12 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR13 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR14 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR15 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR16 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCR23 = (New-Object 'System.Collections.Generic.List[PSObject]')
+        PCRMinusOne = (New-Object 'System.Collections.Generic.List[PSObject]')
+    }
+
+    foreach ($PCRMeasurement in $Events) {
+        if ($PCRMeasurement['PCR'] -eq -1) {
+            $PCRMeasurement.Remove('PCR')
+            $PCRTemplate['PCRMinusOne'].Add(([PSCustomObject] $PCRMeasurement))
+        } else {
+            $PCRNum = $PCRMeasurement['PCR']
+            $PCRMeasurement.Remove('PCR')
+            $PCRTemplate["PCR$($PCRNum)"].Add(([PSCustomObject] $PCRMeasurement))
+        }
+    }
+
+    foreach ($Key in $PCRTemplate.GetEnumerator().Name) {
+        if ($PCRTemplate[$Key].Count -eq 0) { $PCRTemplate[$Key] = $null }
+        if ($PCRTemplate[$Key].Count -eq 1) { $PCRTemplate[$Key] = $PCRTemplate[$Key][0] }
+    }
+
     $TCGEventLog = [PSCustomObject] @{
         PSTypeName = 'TCGLog'
         LogPath = $LogFullPath
         Header = $TCGHeader
-        Events = $Events
+        Events = ([PSCustomObject] $PCRTemplate)
     }
 
     $TCGEventLog

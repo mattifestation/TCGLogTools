@@ -1,7 +1,7 @@
 @{
 RootModule = 'TCGLogTools.psm1'
 
-ModuleVersion = '0.1.0.0'
+ModuleVersion = '0.2.0.0'
 
 GUID = '39075465-235a-4878-9dcf-301af4feed60'
 
@@ -30,6 +30,10 @@ PrivateData = @{
         ProjectUri = 'https://github.com/mattifestation/TCGLogTools'
 
         ReleaseNotes = @'
+0.2.0
+Enhancements:
+* Major refactor of ConvertTo-TCGEventLog output. Parsed logs are much more intuitive now.
+
 0.1.0
 -----
 Initial release!
